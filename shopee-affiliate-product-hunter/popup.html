@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Shopee Affiliate Product Hunter</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <h1>Shopee Affiliate <span>Product Hunter</span></h1>
+      <p class="subtitle">Quét trang Shopee → chấm điểm → gợi ý sản phẩm đáng làm affiliate.</p>
+    </header>
+
+    <section class="actions">
+      <button id="btnScan" class="btn btn-primary">🔍 Scan Current Page</button>
+      <div class="actions-row">
+        <button id="btnExport" class="btn btn-secondary">⬇ Export CSV</button>
+        <button id="btnClear" class="btn btn-ghost">🗑 Clear</button>
+      </div>
+    </section>
+
+    <section id="status" class="status hidden"></section>
+
+    <section class="stats">
+      <div class="stat">
+        <span class="stat-label">Tìm thấy</span>
+        <span id="statCount" class="stat-value">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Rất nên làm</span>
+        <span id="statTop" class="stat-value good">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Trung bình điểm</span>
+        <span id="statAvg" class="stat-value">0</span>
+      </div>
+    </section>
+
+    <section class="filter-row">
+      <input id="searchBox" type="text" placeholder="Lọc theo tên sản phẩm..." />
+      <select id="labelFilter">
+        <option value="all">Tất cả nhãn</option>
+        <option value="Rất nên làm">Rất nên làm</option>
+        <option value="Có tiềm năng">Có tiềm năng</option>
+        <option value="Cần cân nhắc">Cần cân nhắc</option>
+        <option value="Bỏ qua">Bỏ qua</option>
+      </select>
+    </section>
+
+    <main id="productList" class="product-list">
+      <div class="empty-state">Chưa có sản phẩm. Mở trang Shopee và bấm <b>Scan Current Page</b>.</div>
+    </main>
+
+    <footer class="app-footer">
+      <small>v1.0.0 · Chỉ đọc dữ liệu hiển thị công khai trên tab hiện tại.</small>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

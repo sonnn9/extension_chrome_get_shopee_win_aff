@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Shopee Affiliate Product Hunter",
+  "version": "1.0.0",
+  "description": "Phân tích & chấm điểm sản phẩm Shopee đang hiển thị trên trang để gợi ý sản phẩm đáng làm affiliate.",
+  "action": {
+    "default_title": "Shopee Affiliate Product Hunter",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://shopee.vn/*",
+    "*://shopee.com/*",
+    "*://shopee.co.id/*",
+    "*://shopee.com.my/*",
+    "*://shopee.sg/*",
+    "*://shopee.co.th/*",
+    "*://shopee.ph/*",
+    "*://shopee.tw/*",
+    "*://shopee.com.br/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://shopee.vn/*",
+        "*://shopee.com/*",
+        "*://shopee.co.id/*",
+        "*://shopee.com.my/*",
+        "*://shopee.sg/*",
+        "*://shopee.co.th/*",
+        "*://shopee.ph/*",
+        "*://shopee.tw/*",
+        "*://shopee.com.br/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

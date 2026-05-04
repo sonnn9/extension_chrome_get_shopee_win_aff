@@ -1,0 +1,225 @@
+Bạn là senior Chrome Extension developer. Hãy giúp tôi xây dựng một Chrome Extension tên là:
+
+SHOPEE AFFILIATE PRODUCT HUNTER
+
+Mục tiêu:
+Tạo extension hỗ trợ tôi tìm các sản phẩm tiềm năng để làm affiliate trên Shopee. Extension chỉ phân tích dữ liệu hiển thị công khai trên trang Shopee mà người dùng đang mở, KHÔNG spam request, KHÔNG tự động click, KHÔNG tạo traffic giả, KHÔNG crawl ồ ạt, KHÔNG vi phạm điều khoản nền tảng.
+
+Extension cần hoạt động theo hướng:
+Người dùng tự mở trang Shopee/search/category/shop/product list → bấm nút “Scan Page” → extension đọc các sản phẩm đang hiển thị trên trang → phân tích → chấm điểm → gợi ý sản phẩm đáng làm affiliate/content.
+
+Yêu cầu kỹ thuật:
+- Chrome Extension Manifest V3
+- Code bằng JavaScript thuần, HTML, CSS
+- Không dùng framework phức tạp
+- Có các file tối thiểu:
+  - manifest.json
+  - popup.html
+  - popup.css
+  - popup.js
+  - content.js
+  - background.js nếu cần
+- Code rõ ràng, có comment dễ hiểu
+- Ưu tiên chạy local, dễ cài bằng “Load unpacked”
+- Không cần backend ở bản MVP
+- Lưu dữ liệu bằng chrome.storage.local
+- Có thể export dữ liệu ra CSV
+
+Chức năng chính bản MVP:
+
+1. Popup giao diện chính
+Popup có các phần:
+- Tiêu đề: Shopee Affiliate Product Hunter
+- Nút “Scan Current Page”
+- Nút “Export CSV”
+- Nút “Clear Saved Products”
+- Khu vực hiển thị số sản phẩm tìm thấy
+- Danh sách sản phẩm dạng card/table
+- Mỗi sản phẩm hiển thị:
+  - Tên sản phẩm
+  - Giá
+  - Số lượt bán nếu lấy được
+  - Rating nếu lấy được
+  - Số review nếu lấy được
+  - Link sản phẩm
+  - Shop name nếu lấy được
+  - Nhãn phân loại: “Rất nên làm”, “Có tiềm năng”, “Cần cân nhắc”, “Bỏ qua”
+  - Affiliate Score / 100
+  - Gợi ý content angle ngắn
+
+2. Content script
+Khi người dùng bấm “Scan Current Page”, content.js sẽ chạy trên tab Shopee hiện tại và cố gắng đọc các sản phẩm đang hiển thị.
+
+Cần hỗ trợ các trang dạng:
+- Trang search Shopee
+- Trang category
+- Trang shop có listing sản phẩm
+- Nếu đang ở trang sản phẩm đơn lẻ, cố gắng đọc thông tin sản phẩm đơn đó
+
+Lưu ý:
+Shopee có thể thay đổi class name thường xuyên, vì vậy hãy viết logic linh hoạt:
+- Ưu tiên tìm các thẻ link chứa “/product/” hoặc đường dẫn sản phẩm Shopee
+- Từ mỗi block sản phẩm, cố gắng lấy text xung quanh để suy luận:
+  - product name
+  - price
+  - sold count
+  - rating
+  - review count
+  - shop name nếu có
+- Nếu không lấy được field nào thì để null hoặc “N/A”
+- Không crash extension nếu Shopee đổi layout
+
+3. Cơ chế chấm điểm sản phẩm
+Tạo hàm calculateAffiliateScore(product).
+
+Điểm tối đa 100, gợi ý công thức:
+
+- Sales score: tối đa 25 điểm
+  - Nếu sold count cao thì điểm cao
+  - 0–50 sold: thấp
+  - 50–500: trung bình
+  - 500–2000: tốt
+  - 2000+: rất tốt
+
+- Rating score: tối đa 20 điểm
+  - Rating >= 4.8: rất tốt
+  - 4.6–4.79: tốt
+  - 4.3–4.59: trung bình
+  - dưới 4.3: rủi ro
+
+- Review score: tối đa 15 điểm
+  - Nhiều review hơn thì điểm cao
+  - Không có review thì điểm thấp
+
+- Price score: tối đa 15 điểm
+  - Ưu tiên sản phẩm dễ mua impulse buy
+  - Tốt nhất: khoảng 99.000–499.000 VND
+  - Dưới 50.000 hoặc quá cao thì điểm thấp hơn
+
+- Content potential score: tối đa 15 điểm
+  Dựa trên tên sản phẩm, ưu tiên các nhóm dễ làm video:
+  - gia dụng thông minh
+  - mẹ và bé
+  - học sinh / văn phòng phẩm
+  - làm đẹp
+  - phụ kiện điện thoại
+  - đồ bếp
+  - đồ decor
+  - đồ tiện ích
+  Nếu tên sản phẩm chứa từ khóa liên quan thì cộng điểm.
+
+- Risk penalty: trừ tối đa 10 điểm
+  Trừ điểm nếu tên sản phẩm có dấu hiệu:
+  - hàng dễ gây tranh cãi
+  - sản phẩm sức khỏe nhạy cảm
+  - cam kết quá đà
+  - rating thấp
+  - quá ít lượt bán
+
+Sau khi tính score:
+- 80–100: “Rất nên làm”
+- 65–79: “Có tiềm năng”
+- 50–64: “Cần cân nhắc”
+- Dưới 50: “Bỏ qua”
+
+4. Gợi ý content angle
+Tạo hàm generateContentAngle(product).
+
+Dựa vào tên sản phẩm và category keyword, tự gợi ý angle ngắn bằng tiếng Việt. Ví dụ:
+- Đồ bếp: “Video problem-solution: căn bếp gọn hơn chỉ với món này”
+- Mẹ và bé: “Review thực tế cho mẹ bỉm: có đáng mua không?”
+- Học sinh/văn phòng phẩm: “Back-to-school item nên có”
+- Làm đẹp: “Test nhanh trước/sau trong 15 giây”
+- Gia dụng: “Một món đồ nhỏ giúp tiết kiệm thời gian mỗi ngày”
+- Nếu không phân loại được: “Review trải nghiệm thật + nêu 3 lý do nên mua”
+
+5. Lưu sản phẩm
+Sau khi scan:
+- Hiển thị kết quả trong popup
+- Lưu vào chrome.storage.local
+- Tránh lưu trùng link sản phẩm
+- Nếu scan lại sản phẩm cũ thì cập nhật thông tin mới
+
+6. Export CSV
+Có nút export CSV gồm các cột:
+- product_name
+- price
+- sold_count
+- rating
+- review_count
+- shop_name
+- product_url
+- affiliate_score
+- label
+- content_angle
+- scanned_at
+
+CSV cần hỗ trợ tiếng Việt UTF-8.
+
+7. UI/UX
+Giao diện popup cần đẹp, gọn, dễ dùng:
+- Width khoảng 420px
+- Card sản phẩm rõ ràng
+- Score nổi bật
+- Label có màu khác nhau:
+  - Rất nên làm: xanh
+  - Có tiềm năng: xanh dương
+  - Cần cân nhắc: cam
+  - Bỏ qua: xám/đỏ nhạt
+- Có loading state khi scan
+- Có thông báo lỗi nếu không phải trang Shopee
+- Có thông báo nếu không tìm thấy sản phẩm
+
+8. Quy tắc an toàn và tuân thủ
+Extension KHÔNG được:
+- Tự động click sản phẩm
+- Tự động lấy link affiliate bằng cách spam
+- Tự tạo đơn, tự tạo click, tự tạo traffic
+- Gửi dữ liệu người dùng đi nơi khác
+- Crawl hàng loạt nhiều trang liên tục
+- Vượt CAPTCHA hoặc cơ chế bảo vệ của Shopee
+- Lấy dữ liệu riêng tư không hiển thị trên trang
+
+Extension CHỈ:
+- Đọc dữ liệu đang hiển thị trên trang người dùng mở
+- Phân tích và chấm điểm để hỗ trợ người dùng ra quyết định
+- Lưu local trên trình duyệt
+
+9. Cần tạo đầy đủ code
+Hãy xuất toàn bộ code hoàn chỉnh cho từng file theo cấu trúc:
+
+shopee-affiliate-product-hunter/
+  manifest.json
+  popup.html
+  popup.css
+  popup.js
+  content.js
+  background.js
+
+Với mỗi file, hãy ghi rõ tên file và code đầy đủ.
+
+10. Hướng dẫn cài đặt
+Sau khi viết code, hãy hướng dẫn tôi:
+- Tạo folder extension
+- Copy từng file vào folder
+- Vào Chrome extensions
+- Bật Developer Mode
+- Load unpacked
+- Mở Shopee
+- Bấm extension
+- Scan page
+- Export CSV
+
+11. Yêu cầu thêm
+Sau khi tạo bản MVP, hãy đề xuất tiếp roadmap bản nâng cao gồm:
+- Bộ lọc theo ngành hàng
+- Bộ lọc score
+- Theo dõi sản phẩm qua nhiều ngày
+- Thêm ô ghi chú content idea
+- Import/export JSON
+- Tạo prompt video TikTok/Reels cho từng sản phẩm
+- Gợi ý caption bán hàng
+- Tự phân nhóm sản phẩm theo niche
+- Dashboard thống kê sản phẩm tốt nhất
+
+Hãy bắt đầu bằng việc tạo code hoàn chỉnh cho bản MVP trước.
