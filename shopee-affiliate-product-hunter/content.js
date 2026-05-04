@@ -274,46 +274,63 @@
     return String(raw).replace(/_tn$/i, "").replace(/\.(jpg|jpeg|png|webp|gif)$/i, "");
   }
 
-  // Cào TẤT CẢ chuỗi trông giống hash ảnh Shopee từ outerHTML (gồm cả attributes,
-  // JSON-LD, inline <script>, og:image meta), bất kể img đã render hay chưa.
-  function harvestHashesFromHtml() {
-    const html = document.documentElement.outerHTML;
-    const hashes = new Set();
-    // 1) Hash 32 hex: cách an toàn nhất là tìm trong context CDN URL
-    const cdnRe = /(?:susercontent\.com\/file\/|cf\.shopee\.[a-z.]+\/file\/|down-[a-z]+\.img\.susercontent\.com\/file\/)([^\s"'<>?#)\\]+)/gi;
-    let m;
-    while ((m = cdnRe.exec(html)) !== null) {
-      hashes.add(normalizeHash(m[1]));
+  // Tìm container gallery: Shopee bố trí gallery + info-h1 trong cùng 1 flex/grid.
+  // Walk up từ <h1> đến tổ tiên có display:flex/grid → tìm sibling KHÔNG chứa h1
+  // mà chứa nhiều <img> → đó chính là gallery panel (ảnh chính + carousel thumbnail).
+  function findGalleryContainer() {
+    const h1 = document.querySelector("h1");
+    if (!h1) return null;
+
+    let node = h1;
+    for (let i = 0; i < 12 && node && node !== document.body; i++) {
+      const parent = node.parentElement;
+      if (!parent) break;
+      const style = window.getComputedStyle(parent);
+      if (style.display === "flex" || style.display === "grid") {
+        // Trong các con của parent: chọn sibling không chứa h1 mà có nhiều img nhất
+        let bestSib = null, bestCount = 0;
+        for (const sib of parent.children) {
+          if (sib === node || sib.contains(h1)) continue;
+          const count = sib.querySelectorAll("img").length;
+          if (count > bestCount) { bestCount = count; bestSib = sib; }
+        }
+        if (bestSib && bestCount >= 2) return bestSib;
+      }
+      node = parent;
     }
-    return hashes;
+    return null;
   }
 
-  // Đọc URL ảnh từ <meta property="og:image"> + <script type="application/ld+json">
+  // Đọc URL ảnh từ <meta og:image> + JSON-LD (Product.image). Đây là 2 nguồn
+  // chính thức của Shopee — luôn đúng, không lẫn ảnh review/recommended.
   function harvestFromMetadata() {
-    const out = new Set();
+    const out = [];
     document.querySelectorAll('meta[property="og:image"], meta[name="twitter:image"]').forEach(meta => {
       const c = meta.getAttribute("content");
-      if (c) {
-        const mm = c.match(/file\/([^\s"'<>?#)\\]+)/);
-        if (mm) out.add(normalizeHash(mm[1]));
-        else out.add(c);
-      }
+      if (!c) return;
+      const mm = c.match(/file\/([^\s"'<>?#)\\]+)/);
+      out.push(mm ? normalizeHash(mm[1]) : c);
     });
     document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
       try {
         const data = JSON.parse(s.textContent || "{}");
-        const stack = [data];
+        // Chỉ quan tâm Product.image — bỏ qua field image khác (Review.author.image, …)
+        const stack = Array.isArray(data) ? [...data] : [data];
         while (stack.length) {
-          const cur = stack.pop();
-          if (!cur) continue;
-          if (typeof cur === "string") {
-            const mm = cur.match(/file\/([^\s"'<>?#)\\]+)/);
-            if (mm) out.add(normalizeHash(mm[1]));
-          } else if (Array.isArray(cur)) {
-            cur.forEach(x => stack.push(x));
-          } else if (typeof cur === "object") {
-            if (cur.image) stack.push(cur.image);
-            Object.values(cur).forEach(v => stack.push(v));
+          const cur = stack.shift();
+          if (!cur || typeof cur !== "object") continue;
+          if (cur["@type"] === "Product" && cur.image) {
+            const imgs = Array.isArray(cur.image) ? cur.image : [cur.image];
+            imgs.forEach(u => {
+              if (typeof u !== "string") return;
+              const mm = u.match(/file\/([^\s"'<>?#)\\]+)/);
+              out.push(mm ? normalizeHash(mm[1]) : u);
+            });
+          }
+          // Đào tiếp các nested object nhưng KHÔNG follow vào Review/UserComments
+          for (const [k, v] of Object.entries(cur)) {
+            if (/review|comment|author/i.test(k)) continue;
+            if (v && typeof v === "object") stack.push(v);
           }
         }
       } catch (_) {}
@@ -321,35 +338,38 @@
     return out;
   }
 
-  // Đọc URL ảnh đã render: <img src/srcset/currentSrc/data-*>, background-image inline
-  function harvestFromDom() {
-    const out = new Set();
-    document.querySelectorAll("img").forEach(img => {
-      const cands = [
-        img.currentSrc,
-        img.src,
-        img.getAttribute("data-src"),
-        img.getAttribute("data-original"),
-        img.getAttribute("data-lazy-src"),
-        img.getAttribute("data-image"),
-      ];
+  // CHỈ đọc ảnh trong gallery container. Bỏ avatar review, recommended, banner.
+  function harvestFromGalleryDom() {
+    const out = [];
+    const root = findGalleryContainer();
+    if (!root) return out;
+
+    const collect = (u) => {
+      if (!u) return;
+      const mm = String(u).match(/file\/([^\s"'<>?#)\\]+)/);
+      if (mm) out.push(normalizeHash(mm[1]));
+    };
+
+    root.querySelectorAll("img").forEach(img => {
+      collect(img.currentSrc);
+      collect(img.src);
+      collect(img.getAttribute("data-src"));
+      collect(img.getAttribute("data-original"));
+      collect(img.getAttribute("data-lazy-src"));
+      collect(img.getAttribute("data-image"));
       if (img.srcset) {
-        img.srcset.split(",").forEach(e => cands.push(e.trim().split(/\s+/)[0]));
+        img.srcset.split(",").forEach(e => collect(e.trim().split(/\s+/)[0]));
       }
-      cands.filter(Boolean).forEach(u => {
-        const mm = String(u).match(/file\/([^\s"'<>?#)\\]+)/);
-        if (mm) out.add(normalizeHash(mm[1]));
-      });
     });
-    document.querySelectorAll("[style*='background']").forEach(node => {
+
+    // background-image trong gallery (Shopee đôi khi dùng div + bg)
+    root.querySelectorAll("[style*='background']").forEach(node => {
       const s = node.getAttribute("style") || "";
       const re = /url\(["']?([^"')]+)["']?\)/gi;
       let m;
-      while ((m = re.exec(s)) !== null) {
-        const mm = m[1].match(/file\/([^\s"'<>?#)\\]+)/);
-        if (mm) out.add(normalizeHash(mm[1]));
-      }
+      while ((m = re.exec(s)) !== null) collect(m[1]);
     });
+
     return out;
   }
 
@@ -372,31 +392,30 @@
     return SHOPEE_CDN_HOST + hash;
   }
 
-  // Trả về danh sách URL ảnh ưu tiên: og:image / ld+json đứng đầu, rồi DOM, rồi HTML harvest.
-  // Lọc icon/banner bằng từ khoá rõ ràng.
+  // Trả về danh sách URL ảnh: ưu tiên og:image + JSON-LD (Product.image), kế tiếp
+  // là ảnh trong gallery container. KHÔNG đọc toàn DOM/HTML để tránh dính ảnh
+  // review (avatar, ảnh user upload), recommended, banner.
   async function extractProductImages() {
     await triggerLazyLoad();
 
-    const fromMeta = harvestFromMetadata();
-    const fromDom  = harvestFromDom();
-    const fromHtml = harvestHashesFromHtml();
+    const fromMeta    = harvestFromMetadata();
+    const fromGallery = harvestFromGalleryDom();
 
     const ordered = [];
     const seen = new Set();
-    function pushAll(set) {
-      for (const h of set) {
+    function pushAll(arr) {
+      for (const h of arr) {
         if (!h || seen.has(h)) continue;
-        // Bỏ các hash trông như icon hệ thống (thường < 16 ký tự hoặc chứa "logo/icon")
         if (/icon|logo|avatar|sprite|placeholder/i.test(h)) continue;
         seen.add(h);
         ordered.push(h);
       }
     }
     pushAll(fromMeta);
-    pushAll(fromDom);
-    pushAll(fromHtml);
+    pushAll(fromGallery);
 
-    return ordered.map(buildCdnUrl);
+    // Cap an toàn: gallery Shopee tối đa ~9 ảnh; >12 chắc chắn lẫn rác
+    return ordered.slice(0, 12).map(buildCdnUrl);
   }
 
   async function extractProductInfo() {
