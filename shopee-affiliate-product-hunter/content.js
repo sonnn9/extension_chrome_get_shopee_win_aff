@@ -122,9 +122,15 @@
     }
 
     // sold_count: dòng có "đã bán" hoặc "sold"
+    // sold_recent: ưu tiên các badge "đã bán X trong tháng / gần đây / 30 ngày"
     let sold = null;
-    const soldLine = lines.find(l => /đã bán|sold/i.test(l));
+    let soldRecent = null;
+    const recentLine = lines.find(l => /đã bán[^.\n]*?(trong tháng|tháng này|gần đây|30 ngày|tuần này)/i.test(l));
+    if (recentLine) soldRecent = parseCount(recentLine);
+    const soldLine = lines.find(l => /đã bán|sold/i.test(l) && l !== recentLine);
     if (soldLine) sold = parseCount(soldLine);
+    // Nếu chỉ có 1 dòng "đã bán ..." chung chung, vẫn dùng làm sold tổng
+    if (sold == null && recentLine) sold = parseCount(recentLine);
 
     // rating: tìm node có aria-label "rating" hoặc dòng dạng "4.8" gần text "đã bán"
     let rating = null;
@@ -155,6 +161,7 @@
       product_name: name || null,
       price: price,
       sold_count: sold,
+      sold_recent: soldRecent,
       rating: rating,
       review_count: reviews,
       shop_name: shop,
@@ -183,10 +190,14 @@
     const priceLine = lines.find(l => /₫|VND/i.test(l));
     if (priceLine) price = parsePrice(priceLine);
 
-    // sold
+    // sold + sold_recent
     let sold = null;
-    const soldLine = lines.find(l => /đã bán|sold/i.test(l));
+    let soldRecent = null;
+    const recentLine = lines.find(l => /đã bán[^.\n]*?(trong tháng|tháng này|gần đây|30 ngày|tuần này)/i.test(l));
+    if (recentLine) soldRecent = parseCount(recentLine);
+    const soldLine = lines.find(l => /đã bán|sold/i.test(l) && l !== recentLine);
     if (soldLine) sold = parseCount(soldLine);
+    if (sold == null && recentLine) sold = parseCount(recentLine);
 
     // rating
     let rating = null;
@@ -213,6 +224,7 @@
       product_name: name || null,
       price,
       sold_count: sold,
+      sold_recent: soldRecent,
       rating,
       review_count: reviews,
       shop_name: shop,
@@ -251,15 +263,181 @@
 
   // ---------------- Message handler ----------------------
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg || msg.type !== "SAPTH_SCAN") return false;
-    try {
-      const products = isProductPage() ? extractSinglePage() : extractListingPage();
-      sendResponse({ ok: true, products });
-    } catch (e) {
-      console.error("[SAPTH] scan error:", e);
-      sendResponse({ ok: false, error: String(e && e.message || e) });
+  // ---------------- Image extractor (cho Downloader) ----------------
+
+  // Shopee CDN URL pattern: https://<sub>.img.susercontent.com/file/<HASH>
+  // hoặc https://cf.shopee.vn/file/<HASH>. HASH có thể là 32 hex hoặc namespace-slug.
+  const SHOPEE_CDN_HOST = "https://down-vn.img.susercontent.com/file/";
+
+  function normalizeHash(raw) {
+    // Bỏ suffix kích thước "_tn" hoặc đuôi extension
+    return String(raw).replace(/_tn$/i, "").replace(/\.(jpg|jpeg|png|webp|gif)$/i, "");
+  }
+
+  // Cào TẤT CẢ chuỗi trông giống hash ảnh Shopee từ outerHTML (gồm cả attributes,
+  // JSON-LD, inline <script>, og:image meta), bất kể img đã render hay chưa.
+  function harvestHashesFromHtml() {
+    const html = document.documentElement.outerHTML;
+    const hashes = new Set();
+    // 1) Hash 32 hex: cách an toàn nhất là tìm trong context CDN URL
+    const cdnRe = /(?:susercontent\.com\/file\/|cf\.shopee\.[a-z.]+\/file\/|down-[a-z]+\.img\.susercontent\.com\/file\/)([^\s"'<>?#)\\]+)/gi;
+    let m;
+    while ((m = cdnRe.exec(html)) !== null) {
+      hashes.add(normalizeHash(m[1]));
     }
-    return true; // keep channel open for sync sendResponse
+    return hashes;
+  }
+
+  // Đọc URL ảnh từ <meta property="og:image"> + <script type="application/ld+json">
+  function harvestFromMetadata() {
+    const out = new Set();
+    document.querySelectorAll('meta[property="og:image"], meta[name="twitter:image"]').forEach(meta => {
+      const c = meta.getAttribute("content");
+      if (c) {
+        const mm = c.match(/file\/([^\s"'<>?#)\\]+)/);
+        if (mm) out.add(normalizeHash(mm[1]));
+        else out.add(c);
+      }
+    });
+    document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+      try {
+        const data = JSON.parse(s.textContent || "{}");
+        const stack = [data];
+        while (stack.length) {
+          const cur = stack.pop();
+          if (!cur) continue;
+          if (typeof cur === "string") {
+            const mm = cur.match(/file\/([^\s"'<>?#)\\]+)/);
+            if (mm) out.add(normalizeHash(mm[1]));
+          } else if (Array.isArray(cur)) {
+            cur.forEach(x => stack.push(x));
+          } else if (typeof cur === "object") {
+            if (cur.image) stack.push(cur.image);
+            Object.values(cur).forEach(v => stack.push(v));
+          }
+        }
+      } catch (_) {}
+    });
+    return out;
+  }
+
+  // Đọc URL ảnh đã render: <img src/srcset/currentSrc/data-*>, background-image inline
+  function harvestFromDom() {
+    const out = new Set();
+    document.querySelectorAll("img").forEach(img => {
+      const cands = [
+        img.currentSrc,
+        img.src,
+        img.getAttribute("data-src"),
+        img.getAttribute("data-original"),
+        img.getAttribute("data-lazy-src"),
+        img.getAttribute("data-image"),
+      ];
+      if (img.srcset) {
+        img.srcset.split(",").forEach(e => cands.push(e.trim().split(/\s+/)[0]));
+      }
+      cands.filter(Boolean).forEach(u => {
+        const mm = String(u).match(/file\/([^\s"'<>?#)\\]+)/);
+        if (mm) out.add(normalizeHash(mm[1]));
+      });
+    });
+    document.querySelectorAll("[style*='background']").forEach(node => {
+      const s = node.getAttribute("style") || "";
+      const re = /url\(["']?([^"')]+)["']?\)/gi;
+      let m;
+      while ((m = re.exec(s)) !== null) {
+        const mm = m[1].match(/file\/([^\s"'<>?#)\\]+)/);
+        if (mm) out.add(normalizeHash(mm[1]));
+      }
+    });
+    return out;
+  }
+
+  // Force trigger lazy-load: scroll xuống/lên + chờ
+  async function triggerLazyLoad() {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const originalY = window.scrollY;
+    const steps = [0, 300, 700, 1200, 1800, 0];
+    for (const y of steps) {
+      window.scrollTo({ top: y, behavior: "instant" in window ? "instant" : "auto" });
+      await sleep(350);
+    }
+    window.scrollTo({ top: originalY, behavior: "instant" in window ? "instant" : "auto" });
+    await sleep(400);
+  }
+
+  function buildCdnUrl(hash) {
+    // Nếu hash đã là URL đầy đủ (fallback từ og:image không match pattern), trả về thẳng
+    if (/^https?:\/\//.test(hash)) return hash;
+    return SHOPEE_CDN_HOST + hash;
+  }
+
+  // Trả về danh sách URL ảnh ưu tiên: og:image / ld+json đứng đầu, rồi DOM, rồi HTML harvest.
+  // Lọc icon/banner bằng từ khoá rõ ràng.
+  async function extractProductImages() {
+    await triggerLazyLoad();
+
+    const fromMeta = harvestFromMetadata();
+    const fromDom  = harvestFromDom();
+    const fromHtml = harvestHashesFromHtml();
+
+    const ordered = [];
+    const seen = new Set();
+    function pushAll(set) {
+      for (const h of set) {
+        if (!h || seen.has(h)) continue;
+        // Bỏ các hash trông như icon hệ thống (thường < 16 ký tự hoặc chứa "logo/icon")
+        if (/icon|logo|avatar|sprite|placeholder/i.test(h)) continue;
+        seen.add(h);
+        ordered.push(h);
+      }
+    }
+    pushAll(fromMeta);
+    pushAll(fromDom);
+    pushAll(fromHtml);
+
+    return ordered.map(buildCdnUrl);
+  }
+
+  async function extractProductInfo() {
+    const single = extractSinglePage()[0] || {};
+    const images = await extractProductImages();
+    return {
+      product_name: single.product_name || (document.title.split("|")[0].trim() || null),
+      product_url: absoluteUrl(location.pathname + location.search),
+      shop_name: single.shop_name || null,
+      price: single.price || null,
+      image_urls: images,
+    };
+  }
+
+  // ---------------- Message handler ----------------------
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg) return false;
+
+    if (msg.type === "SAPTH_SCAN") {
+      try {
+        const products = isProductPage() ? extractSinglePage() : extractListingPage();
+        sendResponse({ ok: true, products });
+      } catch (e) {
+        console.error("[SAPTH] scan error:", e);
+        sendResponse({ ok: false, error: String(e && e.message || e) });
+      }
+      return true;
+    }
+
+    if (msg.type === "SAPTH_EXTRACT_IMAGES") {
+      // async: sendResponse cần được giữ channel mở → return true
+      extractProductInfo()
+        .then(info => sendResponse({ ok: true, info }))
+        .catch(e => {
+          console.error("[SAPTH] extract images error:", e);
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        });
+      return true;
+    }
+
+    return false;
   });
 })();

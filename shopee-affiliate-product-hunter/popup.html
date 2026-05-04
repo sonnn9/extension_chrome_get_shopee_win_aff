@@ -12,6 +12,12 @@
       <p class="subtitle">Quét trang Shopee → chấm điểm → gợi ý sản phẩm đáng làm affiliate.</p>
     </header>
 
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="hunter">🎯 Hunter</button>
+      <button class="tab-btn" data-tab="downloader">📥 Image Downloader</button>
+    </nav>
+
+    <section id="tab-hunter" class="tab-panel active">
     <section class="actions">
       <button id="btnScan" class="btn btn-primary">🔍 Scan Current Page</button>
       <div class="actions-row">
@@ -48,9 +54,53 @@
       </select>
     </section>
 
+    <section class="select-bar">
+      <label class="select-all">
+        <input type="checkbox" id="selectAll" /> Chọn tất cả hiện tại
+      </label>
+      <span class="select-count">Đã chọn: <b id="selectCount">0</b></span>
+      <button id="btnSendDl" class="btn-link">→ Gửi sang Downloader</button>
+    </section>
+
     <main id="productList" class="product-list">
       <div class="empty-state">Chưa có sản phẩm. Mở trang Shopee và bấm <b>Scan Current Page</b>.</div>
     </main>
+    </section>
+
+    <section id="tab-downloader" class="tab-panel">
+      <div class="warn-box">
+        ⚠ <b>Images are downloaded for internal research/reference only.</b>
+        Please respect seller/brand copyright and Shopee Affiliate rules.
+      </div>
+
+      <label class="dl-label">Paste Shopee product links (1 link / dòng):</label>
+      <textarea id="dlLinks" rows="6" placeholder="https://shopee.vn/...-i.123.456&#10;https://shopee.vn/...-i.789.012"></textarea>
+
+      <div class="dl-options">
+        <label><input type="radio" name="dlMode" value="main" checked /> Download main image only</label>
+        <label><input type="radio" name="dlMode" value="all" /> Download all product images</label>
+        <label><input type="checkbox" id="dlSaveJson" checked /> Save product_info.json</label>
+      </div>
+
+      <div class="dl-options dl-options-row">
+        <label>Delay (s):
+          <input id="dlDelay" type="number" min="3" max="10" step="1" value="4" />
+        </label>
+        <span class="dl-hint">3–5s khuyến nghị, không spam request.</span>
+      </div>
+
+      <div class="actions-row">
+        <button id="btnDlStart" class="btn btn-primary">▶ Start Download</button>
+        <button id="btnDlStop" class="btn btn-ghost" disabled>■ Stop</button>
+      </div>
+
+      <div id="dlProgress" class="dl-progress hidden">
+        <div class="dl-progress-bar"><div id="dlProgressFill" class="dl-progress-fill"></div></div>
+        <div id="dlProgressText" class="dl-progress-text">0 / 0</div>
+      </div>
+
+      <ul id="dlLog" class="dl-log"></ul>
+    </section>
 
     <footer class="app-footer">
       <small>v1.0.0 · Chỉ đọc dữ liệu hiển thị công khai trên tab hiện tại.</small>

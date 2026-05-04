@@ -13,7 +13,9 @@
   "permissions": [
     "activeTab",
     "storage",
-    "scripting"
+    "scripting",
+    "tabs",
+    "downloads"
   ],
   "host_permissions": [
     "*://shopee.vn/*",

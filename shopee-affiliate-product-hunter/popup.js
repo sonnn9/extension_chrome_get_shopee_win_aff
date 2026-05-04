@@ -8,6 +8,7 @@
  * ========================================================= */
 
 const STORAGE_KEY = "sapth_products";
+const SELECTION_KEY = "sapth_selection"; // chrome.storage.local: array of product_url
 
 const el = {
   btnScan:    document.getElementById("btnScan"),
@@ -20,7 +21,25 @@ const el = {
   list:       document.getElementById("productList"),
   search:     document.getElementById("searchBox"),
   labelFilt:  document.getElementById("labelFilter"),
+  selectAll:  document.getElementById("selectAll"),
+  selectCount:document.getElementById("selectCount"),
+  btnSendDl:  document.getElementById("btnSendDl"),
 };
+
+// Selection state lưu trong memory + persist storage
+let selectedUrls = new Set();
+let visibleUrls = []; // các URL đang hiển thị sau filter (cho Select All)
+
+async function loadSelection() {
+  const obj = await chrome.storage.local.get(SELECTION_KEY);
+  selectedUrls = new Set(Array.isArray(obj[SELECTION_KEY]) ? obj[SELECTION_KEY] : []);
+}
+async function saveSelection() {
+  await chrome.storage.local.set({ [SELECTION_KEY]: Array.from(selectedUrls) });
+}
+function updateSelectCount() {
+  if (el.selectCount) el.selectCount.textContent = selectedUrls.size;
+}
 
 // ----------------------- UI helpers -----------------------
 function showStatus(msg, type = "info", autoHideMs = 0) {
@@ -68,16 +87,43 @@ function calculateAffiliateScore(p) {
   let total = 0;
   const breakdown = {};
 
-  // 1) Sales (max 25)
+  // 1a) Sales VOLUME (max 15) — quy mô tổng
   const sold = Number(p.sold_count) || 0;
-  let salesScore;
-  if (sold >= 2000)      salesScore = 25;
-  else if (sold >= 500)  salesScore = 20;
-  else if (sold >= 50)   salesScore = 12;
-  else if (sold > 0)     salesScore = 6;
-  else                   salesScore = 0;
-  breakdown.sales = salesScore;
-  total += salesScore;
+  let volumeScore;
+  if (sold >= 2000)      volumeScore = 15;
+  else if (sold >= 500)  volumeScore = 12;
+  else if (sold >= 50)   volumeScore = 7;
+  else if (sold > 0)     volumeScore = 4;
+  else                   volumeScore = 0;
+  breakdown.volume = volumeScore;
+  total += volumeScore;
+
+  // 1b) Sales VELOCITY (max 10) — tốc độ bán gần đây
+  // Ưu tiên: sold_recent (badge "đã bán X trong tháng"). Fallback: heuristic review/sold ratio.
+  const reviewsForVelocity = Number(p.review_count) || 0;
+  let velocityScore = 0;
+  let velocityPerMonth = null;
+  if (Number(p.sold_recent) > 0) {
+    velocityPerMonth = Number(p.sold_recent);
+    if (velocityPerMonth >= 1000)      velocityScore = 10;
+    else if (velocityPerMonth >= 300)  velocityScore = 8;
+    else if (velocityPerMonth >= 100)  velocityScore = 6;
+    else if (velocityPerMonth >= 30)   velocityScore = 4;
+    else if (velocityPerMonth > 0)     velocityScore = 2;
+  } else if (sold > 0) {
+    // Heuristic Cách 3: review/sold ratio
+    // <2%  → listing rất mới HOẶC sold buff → +6 (có thể đang viral, có rủi ro)
+    // 2-8% → bình thường → +4
+    // 8-15% → ổn định, có lẽ đã bán lâu → +2
+    // >15% → quá già, sold tăng chậm → +0
+    const ratio = reviewsForVelocity / sold;
+    if (ratio < 0.02)       velocityScore = 6;
+    else if (ratio < 0.08)  velocityScore = 4;
+    else if (ratio < 0.15)  velocityScore = 2;
+    else                    velocityScore = 0;
+  }
+  breakdown.velocity = velocityScore;
+  total += velocityScore;
 
   // 2) Rating (max 20)
   const rating = Number(p.rating) || 0;
@@ -143,7 +189,7 @@ function calculateAffiliateScore(p) {
   else if (total >= 50) label = "Cần cân nhắc";
   else                  label = "Bỏ qua";
 
-  return { score: total, label, breakdown, matchedCategory };
+  return { score: total, label, breakdown, matchedCategory, velocityPerMonth };
 }
 
 function generateContentAngle(p, matchedCategory) {
@@ -216,20 +262,31 @@ function renderList(products) {
     return;
   }
 
+  // Sync select-all checkbox & visible URLs
+  visibleUrls = filtered.map(p => p.product_url);
+  if (el.selectAll) {
+    el.selectAll.checked = visibleUrls.length > 0 && visibleUrls.every(u => selectedUrls.has(u));
+  }
+  updateSelectCount();
+
   el.list.innerHTML = filtered.map(p => {
     const price   = p.price ? formatPrice(p.price) : "N/A";
     const sold    = p.sold_count != null ? p.sold_count.toLocaleString("vi-VN") : "N/A";
     const rating  = p.rating != null ? p.rating : "N/A";
     const reviews = p.review_count != null ? p.review_count.toLocaleString("vi-VN") : "N/A";
     const shop    = p.shop_name || "N/A";
+    const velocityHtml = renderVelocityBadge(p);
+    const isPicked = selectedUrls.has(p.product_url);
     return `
-      <article class="card">
+      <article class="card${isPicked ? " picked" : ""}" data-url="${escapeAttr(p.product_url)}">
         <div class="card-top">
+          <input type="checkbox" class="card-pick" data-url="${escapeAttr(p.product_url)}" ${isPicked ? "checked" : ""} title="Chọn để gửi sang Downloader" />
           <a class="card-name" href="${escapeAttr(p.product_url)}" target="_blank" rel="noopener">${escapeHtml(p.product_name || "(Không tên)")}</a>
           <span class="card-score" title="Affiliate Score / 100">${p.affiliate_score ?? 0}</span>
         </div>
-        <div>
+        <div class="card-labels">
           <span class="${labelClass(p.label)}">${p.label}</span>
+          ${velocityHtml}
         </div>
         <div class="card-meta">
           <span>💰 <b>${price}</b></span>
@@ -242,6 +299,32 @@ function renderList(products) {
       </article>
     `;
   }).join("");
+}
+
+// Hiển thị badge velocity:
+// - Nếu có sold_recent (đo thật từ Shopee) → "⚡ X/tháng" + dấu hiệu hot
+// - Nếu chỉ có sold + reviews → suy ra "trẻ"/"ổn định"/"chậm" từ tỷ lệ review/sold
+function renderVelocityBadge(p) {
+  const recent = Number(p.sold_per_month);
+  if (recent > 0) {
+    const fmt = recent.toLocaleString("vi-VN");
+    let cls = "vel vel-low";
+    let icon = "⚡";
+    if (recent >= 1000) { cls = "vel vel-fire"; icon = "🔥"; }
+    else if (recent >= 300) { cls = "vel vel-hot"; }
+    else if (recent >= 100) { cls = "vel vel-warm"; }
+    return `<span class="${cls}" title="Đã bán gần đây">${icon} ${fmt}/tháng</span>`;
+  }
+  const sold = Number(p.sold_count) || 0;
+  const reviews = Number(p.review_count) || 0;
+  if (sold > 0 && reviews >= 0) {
+    const ratio = reviews / sold;
+    if (ratio < 0.02 && sold >= 50)
+      return `<span class="vel vel-young" title="Tỷ lệ review/sold thấp → listing trẻ hoặc đang viral">🌱 listing trẻ</span>`;
+    if (ratio > 0.15)
+      return `<span class="vel vel-old" title="Tỷ lệ review/sold cao → listing đã lâu, có thể hết trend">🕰 listing già</span>`;
+  }
+  return "";
 }
 
 function escapeHtml(s) {
@@ -292,10 +375,11 @@ async function scanCurrentPage() {
 
     const now = new Date().toISOString();
     const enriched = raw.map(p => {
-      const { score, label, matchedCategory } = calculateAffiliateScore(p);
+      const { score, label, matchedCategory, velocityPerMonth } = calculateAffiliateScore(p);
       const angle = generateContentAngle(p, matchedCategory);
       return {
         ...p,
+        sold_per_month: velocityPerMonth,
         affiliate_score: score,
         label,
         content_angle: angle,
@@ -332,8 +416,9 @@ async function exportCsv() {
     return;
   }
   const headers = [
-    "product_name","price","sold_count","rating","review_count",
-    "shop_name","product_url","affiliate_score","label","content_angle","scanned_at"
+    "product_name","price","sold_count","sold_recent","sold_per_month",
+    "rating","review_count","shop_name","product_url",
+    "affiliate_score","label","content_angle","scanned_at"
   ];
   const rows = list.map(p => headers.map(h => toCsvCell(p[h])).join(","));
   const csv = "﻿" + headers.join(",") + "\n" + rows.join("\n"); // BOM cho Excel UTF-8
@@ -355,9 +440,163 @@ async function exportCsv() {
 // ----------------------- Clear ----------------------------
 async function clearAll() {
   if (!confirm("Xoá toàn bộ sản phẩm đã lưu?")) return;
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await chrome.storage.local.remove([STORAGE_KEY, SELECTION_KEY]);
+  selectedUrls.clear();
   renderList([]);
   showStatus("🗑 Đã xoá toàn bộ sản phẩm.", "info", 3000);
+}
+
+// ----------------------- Selection handlers ---------------
+function setupSelectionHandlers() {
+  // Click checkbox trong card
+  el.list.addEventListener("change", async (e) => {
+    const t = e.target;
+    if (!t.classList || !t.classList.contains("card-pick")) return;
+    const url = t.dataset.url;
+    if (!url) return;
+    if (t.checked) selectedUrls.add(url);
+    else selectedUrls.delete(url);
+    const card = t.closest(".card");
+    if (card) card.classList.toggle("picked", t.checked);
+    if (el.selectAll) {
+      el.selectAll.checked = visibleUrls.length > 0 && visibleUrls.every(u => selectedUrls.has(u));
+    }
+    updateSelectCount();
+    await saveSelection();
+  });
+
+  // Select all (chỉ trong tập đang hiển thị)
+  if (el.selectAll) {
+    el.selectAll.addEventListener("change", async () => {
+      const checked = el.selectAll.checked;
+      for (const u of visibleUrls) {
+        if (checked) selectedUrls.add(u);
+        else selectedUrls.delete(u);
+      }
+      // Update DOM checkboxes nhanh, không cần re-render toàn bộ
+      el.list.querySelectorAll(".card-pick").forEach(cb => {
+        cb.checked = checked;
+        const card = cb.closest(".card");
+        if (card) card.classList.toggle("picked", checked);
+      });
+      updateSelectCount();
+      await saveSelection();
+    });
+  }
+
+  // Send sang Downloader
+  if (el.btnSendDl) {
+    el.btnSendDl.addEventListener("click", () => {
+      if (selectedUrls.size === 0) {
+        showStatus("Chưa chọn sản phẩm nào.", "warn", 3000);
+        return;
+      }
+      fillDownloaderLinks(Array.from(selectedUrls));
+      // Chuyển sang tab Downloader
+      const dlTabBtn = document.querySelector('.tab-btn[data-tab="downloader"]');
+      if (dlTabBtn) dlTabBtn.click();
+    });
+  }
+}
+
+function fillDownloaderLinks(urls) {
+  const ta = document.getElementById("dlLinks");
+  if (!ta) return;
+  // Merge với link đang có sẵn (nếu user đã paste tay) và dedupe
+  const existing = (ta.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+  const merged = Array.from(new Set([...existing, ...urls]));
+  ta.value = merged.join("\n");
+}
+
+// ----------------------- Image Downloader -----------------
+const dl = {
+  start:    document.getElementById("btnDlStart"),
+  stop:     document.getElementById("btnDlStop"),
+  links:    document.getElementById("dlLinks"),
+  saveJson: document.getElementById("dlSaveJson"),
+  delay:    document.getElementById("dlDelay"),
+  prog:     document.getElementById("dlProgress"),
+  fill:     document.getElementById("dlProgressFill"),
+  text:     document.getElementById("dlProgressText"),
+  log:      document.getElementById("dlLog"),
+};
+
+function dlAppend(level, msg) {
+  if (!dl.log) return;
+  const li = document.createElement("li");
+  li.className = level;
+  li.textContent = msg;
+  dl.log.appendChild(li);
+  dl.log.scrollTop = dl.log.scrollHeight;
+}
+
+function dlSetRunning(running) {
+  dl.start.disabled = running;
+  dl.stop.disabled = !running;
+  if (running) dl.prog.classList.remove("hidden");
+}
+
+function dlStart() {
+  const lines = (dl.links.value || "").split("\n").map(s => s.trim()).filter(Boolean);
+  if (lines.length === 0) {
+    dlAppend("err", "✗ Chưa nhập link nào.");
+    return;
+  }
+  const mode = (document.querySelector('input[name="dlMode"]:checked') || {}).value || "main";
+  const payload = {
+    links: lines,
+    mode,
+    saveJson: !!dl.saveJson.checked,
+    delaySec: Number(dl.delay.value) || 4,
+  };
+  dl.log.innerHTML = "";
+  dl.fill.style.width = "0%";
+  dl.text.textContent = `0 / ${lines.length}`;
+  dlSetRunning(true);
+  chrome.runtime.sendMessage({ type: "SAPTH_DL_START", payload });
+}
+
+function dlStop() {
+  chrome.runtime.sendMessage({ type: "SAPTH_DL_STOP" });
+  dlAppend("wait", "… Đang dừng job…");
+}
+
+// Lắng message từ background
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg) return;
+  if (msg.type === "SAPTH_DL_LOG") {
+    dlAppend(msg.level || "info", msg.msg || "");
+  } else if (msg.type === "SAPTH_DL_PROGRESS") {
+    const pct = msg.total ? Math.round((msg.current / msg.total) * 100) : 0;
+    dl.fill.style.width = pct + "%";
+    dl.text.textContent = `${msg.current} / ${msg.total}`;
+  } else if (msg.type === "SAPTH_DL_DONE") {
+    dlSetRunning(false);
+    dlAppend("info", `✓ Hoàn tất. Thành công ${msg.ok}/${msg.total} sản phẩm.`);
+  }
+});
+
+// ----------------------- Tabs -----------------------------
+function setupTabs() {
+  const btns = document.querySelectorAll(".tab-btn");
+  const panels = document.querySelectorAll(".tab-panel");
+  btns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      btns.forEach(b => b.classList.remove("active"));
+      panels.forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      const target = document.getElementById("tab-" + btn.dataset.tab);
+      if (target) target.classList.add("active");
+
+      // Khi chuyển sang Downloader, auto fill links đã tick (nếu textarea trống)
+      if (btn.dataset.tab === "downloader" && selectedUrls.size > 0) {
+        const ta = document.getElementById("dlLinks");
+        if (ta && !ta.value.trim()) {
+          ta.value = Array.from(selectedUrls).join("\n");
+        }
+      }
+    });
+  });
 }
 
 // ----------------------- Init -----------------------------
@@ -367,6 +606,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   el.btnClear.addEventListener("click", clearAll);
   el.search.addEventListener("input", async () => renderList(await loadStored()));
   el.labelFilt.addEventListener("change", async () => renderList(await loadStored()));
+
+  if (dl.start) dl.start.addEventListener("click", dlStart);
+  if (dl.stop) dl.stop.addEventListener("click", dlStop);
+
+  setupTabs();
+  setupSelectionHandlers();
+  await loadSelection();
 
   const stored = await loadStored();
   renderList(stored);
