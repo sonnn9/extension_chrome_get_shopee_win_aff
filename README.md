@@ -20,10 +20,14 @@ Extension chỉ **đọc dữ liệu hiển thị công khai** trên tab Shopee 
 - 🗑 **Clear Saved Products** một click.
 
 **Tab 📥 Image Downloader:**
-- Paste **nhiều link sản phẩm Shopee** (mỗi link 1 dòng) → tải ảnh hàng loạt có kiểm soát.
+- ✅ **Tick chọn từ tab Hunter** — mỗi card có checkbox + nút **"→ Gửi sang Downloader"** auto-fill link sang tab Downloader (selection được lưu trong `chrome.storage.local`, không mất khi đóng popup).
+- ✅ **Chọn tất cả** trong tập đang lọc, đếm số đã chọn realtime.
+- Hoặc **paste nhiều link sản phẩm Shopee** (mỗi link 1 dòng) thủ công.
 - ⏱ **Delay 3–10s/link** (mặc định 4s) — không spam request.
 - Chế độ: **main image only** hoặc **all product images**.
 - ✅ Tuỳ chọn **Save product_info.json** kèm theo ảnh.
+- 🎯 **Smart image extraction** — chỉ lấy ảnh trong **gallery container** (ảnh chính + carousel thumbnail), bỏ ảnh review / avatar / recommended / banner. Nguồn dữ liệu: `og:image` meta + JSON-LD `Product.image` + DOM của gallery container.
+- 🌀 Auto-scroll trigger lazy-load + chờ SPA render trước khi đọc ảnh.
 - Lưu vào folder: `Shopee_Product_Images/<product_name_or_id>/`
   - `main_image_01.jpg`
   - `product_image_02.jpg`, `product_image_03.jpg`, …
@@ -41,12 +45,12 @@ extension_chrome_get_shopee_win_aff/
 ├── README.md
 ├── prompt.txt
 └── shopee-affiliate-product-hunter/      ← folder load vào Chrome
-    ├── manifest.json     # MV3, host_permissions cho mọi domain Shopee
-    ├── popup.html        # UI 420px
-    ├── popup.css         # Card, label màu, spinner
-    ├── popup.js          # Scoring, content angle, storage, CSV export
-    ├── content.js        # DOM scanner linh hoạt (chống đổi class)
-    └── background.js     # Service worker (init storage, sẵn sàng mở rộng)
+    ├── manifest.json     # MV3 + permissions: activeTab, storage, scripting, tabs, downloads
+    ├── popup.html        # UI 420px, 2 tab: Hunter & Image Downloader
+    ├── popup.css         # Card, label màu, velocity badge, spinner, tabs, downloader
+    ├── popup.js          # Scoring, content angle, selection state, CSV export, dl orchestrator client
+    ├── content.js        # DOM scanner (Hunter) + image extractor (Downloader, chỉ gallery)
+    └── background.js     # Service worker: init storage + Image Downloader orchestrator
 ```
 
 ---
@@ -65,6 +69,8 @@ extension_chrome_get_shopee_win_aff/
 
 ## Cách dùng
 
+### A. Săn sản phẩm (tab 🎯 Hunter)
+
 1. Mở một trang Shopee bất kỳ:
    - Trang search: `shopee.vn/search?keyword=...`
    - Trang category: `shopee.vn/<Tên-ngành-hàng>-cat.<id>`
@@ -75,6 +81,25 @@ extension_chrome_get_shopee_win_aff/
 4. Xem điểm, nhãn và content angle ngay trong popup.
 5. Lọc theo tên / nhãn để rà nhanh.
 6. **⬇ Export CSV** khi đã ưng → dùng cho Sheets / Notion / TikTok content plan.
+
+### B. Tải ảnh sản phẩm (tab 📥 Image Downloader)
+
+**Cách 1 — Tick chọn từ kết quả scan (khuyến nghị):**
+
+1. Ở tab **🎯 Hunter**, tick checkbox bên trái mỗi card sản phẩm muốn tải ảnh.
+   - Có thể dùng **"Chọn tất cả hiện tại"** để tick mọi sản phẩm đang lọc.
+   - Số lượng đã chọn hiển thị realtime: `Đã chọn: N`.
+2. Bấm **"→ Gửi sang Downloader"** → tab tự chuyển + textarea tự fill các link.
+3. Chọn **mode** (main image only / all product images), tick **Save product_info.json** nếu cần.
+4. Đặt **Delay** (3–10s, mặc định 4s) → bấm **▶ Start Download**.
+5. Theo dõi progress bar + log; có thể bấm **■ Stop** để dừng giữa chừng.
+6. Ảnh được lưu vào thư mục Downloads/`Shopee_Product_Images/<tên_sản_phẩm>/`.
+
+**Cách 2 — Paste link thủ công:**
+
+1. Vào trực tiếp tab **📥 Image Downloader**.
+2. Paste nhiều link sản phẩm Shopee, mỗi link 1 dòng.
+3. Làm tiếp bước 3–6 ở Cách 1.
 
 ---
 
@@ -223,6 +248,10 @@ Dùng số này để biết nên ở lại vùng nào, không phí thời gian 
 | Scan ra 0 sản phẩm | Cuộn trang xuống cho Shopee render thêm card, đợi vài giây rồi scan lại. |
 | Một số field N/A | Shopee có thể đổi layout / không hiển thị field đó ở grid. Mở trang sản phẩm đơn lẻ để scan đủ thông tin hơn. |
 | Cập nhật code không thấy đổi | Vào `chrome://extensions/` → bấm **Reload** ở card extension. |
+| Tất cả nút trong popup không bấm được | Mở DevTools popup (chuột phải vào popup → **Inspect**) → tab **Console** xem lỗi JS. Thường do syntax error trong popup.js. |
+| Downloader tải nhầm ảnh review / avatar | Đã fix: chỉ quét ảnh trong gallery container. Nếu vẫn xảy ra ở 1 layout lạ, mở trang sản phẩm đó trong tab thường xem `<h1>` có nằm trong flex/grid container chuẩn không. |
+| Downloader 0 ảnh | Tăng delay lên 6–8s để Shopee SPA render gallery. Hoặc mở trang sản phẩm thử trực tiếp xem ảnh có hiện không. |
+| Ảnh tải về là thumbnail mờ | Đã fix: code tự bỏ suffix `_tn` để lấy bản gốc. Nếu vẫn mờ, có thể Shopee đã đổi naming convention CDN. |
 
 ---
 
@@ -243,9 +272,21 @@ Dùng số này để biết nên ở lại vùng nào, không phí thời gian 
 ## Dev notes
 
 - Stack: **Manifest V3** + JS thuần + HTML/CSS, không framework, không build step.
-- Storage key: `sapth_products` (array, dedupe theo `product_url`).
+- Permissions: `activeTab`, `storage`, `scripting`, `tabs`, `downloads`.
+- Storage keys (`chrome.storage.local`):
+  - `sapth_products` — array sản phẩm đã scan, dedupe theo `product_url`.
+  - `sapth_selection` — array URL đã tick để gửi sang Downloader.
 - Toàn bộ scoring & angle logic ở [popup.js](shopee-affiliate-product-hunter/popup.js) — pure functions, dễ test.
-- Scanner DOM ở [content.js](shopee-affiliate-product-hunter/content.js) — viết theo heuristic (link `-i.<shopId>.<itemId>` → tìm card cha → suy luận text), tránh phụ thuộc class name của Shopee.
+- Scanner sản phẩm ở [content.js](shopee-affiliate-product-hunter/content.js) — viết theo heuristic (link `-i.<shopId>.<itemId>` → tìm card cha → suy luận text), tránh phụ thuộc class name của Shopee.
+- **Image extractor** ở [content.js](shopee-affiliate-product-hunter/content.js):
+  - Walk up từ `<h1>` tìm flex/grid ancestor → chọn sibling không chứa `<h1>` mà có nhiều `<img>` nhất → đó là gallery container.
+  - Nguồn ảnh: `og:image` + JSON-LD (`@type: Product`, bỏ nhánh review/comment/author) + DOM trong gallery container (src/srcset/data-*/background-image).
+  - Build URL gốc qua `https://down-vn.img.susercontent.com/file/<hash>` (bỏ suffix `_tn`).
+  - Cap tối đa 12 ảnh/sản phẩm để tránh lẫn rác.
+- **Downloader orchestrator** ở [background.js](shopee-affiliate-product-hunter/background.js):
+  - Mở tab inactive → `waitForTabComplete` (timeout 20s) → inject content.js → chờ 3s SPA render → gọi `SAPTH_EXTRACT_IMAGES` → `chrome.downloads.download` từng ảnh → đóng tab → delay 3–10s → tiếp link kế.
+  - JSON lưu qua `data:` URL (service worker không có `URL.createObjectURL`).
+  - Có cơ chế cancel cho nút Stop, log realtime qua message `SAPTH_DL_LOG/PROGRESS/DONE`.
 
 ---
 
